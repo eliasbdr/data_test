@@ -37,80 +37,81 @@ def lecture(file, delimiter, decimal_separator, start_row, end_row=None, header_
         st.error(f"Erreur de lecture du fichier {file.name}: {str(e)}")
         return None
 
-def graphe(dataframes, colors, x_axis, y_axis, x_label=None, y_label=None):
-    fig = go.Figure()
-    separator = "||"
-    for x_col in x_axis:
-        for y_col in y_axis:
-            try:
-                x_file, x_col_name = x_col.split(separator, 1)
-                y_file, y_col_name = y_col.split(separator, 1)
-                x_df = next((df for df in dataframes if df.attrs['file_name'] == x_file), None)
-                y_df = next((df for df in dataframes if df.attrs['file_name'] == y_file), None)
-                color = next((color for df, color in zip(dataframes, colors) if df.attrs['file_name'] == x_file), '#000000')
-                
-                if x_df is not None and y_df is not None and x_col_name in x_df.columns and y_col_name in y_df.columns:
-                    fig.add_trace(go.Scatter(
-                        x=x_df[x_col_name],
-                        y=y_df[y_col_name],
-                        mode='lines+markers',
-                        name=f"{x_file}: {x_col_name} vs {y_file}: {y_col_name}",
-                        line=dict(color=color)
-                    ))
-            except (ValueError, KeyError) as e:
-                st.warning(f"Erreur de combinaison {x_col}/{y_col}: {str(e)}")
-    
-    fig.update_layout(
-        title="Visualisation Multi-Fichiers",
-        xaxis_title=x_label or "Axe X",
-        yaxis_title=y_label or "Axe Y",
-        hovermode='x unified',autosize=True)
-    
-    return fig if fig.data else None
 
-def appliquer_operation(dataframes, operation, colonnes_selectionnees, param=None):
-    # Copier les dataframes pour ne pas modifier les originaux
-    modified_dfs = []
+
+
+def graphe(dataframes, colors, x_axis, y_axis, x_label="X Axis", y_label="Y Axis"):
+    fig = go.Figure()
+    
+    # 1. Configuration RESPONSIVE critique
+    fig.update_layout(
+        autosize=True,
+        margin=dict(autoexpand=True, l=0, r=0, t=30, b=0),  # Marges minimales
+    )
+    
+    # 2. Ajout des données (exemple adapté)
+    for df, color in zip(dataframes, colors):
+        file_name = df.attrs.get('file_name', 'unknown')
+        for x_col, y_col in zip(x_axis, y_axis):
+            if x_col.startswith(file_name + "||") and y_col.startswith(file_name + "||"):
+                x_name = x_col.split("||")[1]
+                y_name = y_col.split("||")[1]
+                fig.add_trace(go.Scatter(
+                    x=df[x_name],
+                    y=df[y_name],
+                    mode='lines',
+                    line=dict(width=2, color=color),
+                ))
+    
+    # 3. Optimisation finale
+    fig.update_layout(
+        xaxis_title=x_label,
+        yaxis_title=y_label,
+        hovermode='x unified'
+    )
+    
+    return fig
+
+
+
+
+
+
+def appliquer_operation(dataframes, operation, colonnes_selectionnees, param):
     separator = "||"
+    modified_dfs = []
     
     for df in dataframes:
-        # Créer une copie du dataframe
-        df_copy = df.copy()
+        # Faire une copie profonde du DataFrame
+        df_copy = df.copy(deep=True)
+        file_name = df_copy.attrs.get('file_name', 'unknown')
         
-        # Appliquer l'opération à chaque colonne sélectionnée
-        for colonne in colonnes_selectionnees:
-            file_name, col_name = colonne.split(separator, 1)
-            
-            # Vérifier si nous travaillons sur le bon dataframe
-            if df_copy.attrs['file_name'] == file_name and col_name in df_copy.columns:
-                try:
-                    # Convertir la colonne en numérique si nécessaire
-                    df_copy[col_name] = pd.to_numeric(df_copy[col_name], errors='coerce')
-                    
-                    if operation == 'addition':
-                        value = float(param) if param else 0
-                        new_col_name = f"{col_name}_plus{value}"
-                        df_copy[new_col_name] = df_copy[col_name] + value
-                        st.success(f"Addition de {value} appliquée sur {file_name}: {col_name}")
-                    
-                    elif operation == 'multiplication':
-                        factor = float(param) if param else 1
-                        new_col_name = f"{col_name}_x{factor}"
-                        df_copy[new_col_name] = df_copy[col_name] * factor
-                        st.success(f"Multiplication par {factor} appliquée sur {file_name}: {col_name}")
+        for col_selection in colonnes_selectionnees:
+            if col_selection.startswith(file_name + separator):
+                col_name = col_selection.split(separator)[1]
+                if col_name in df_copy.columns:
+                    try:
+                        # Convertir la colonne en numérique si possible
+                        df_copy[col_name] = pd.to_numeric(df_copy[col_name], errors='coerce')
+                        param_value = float(param)
                         
-                    elif operation == 'division':
-                        divisor = float(param) if param else 1
-                        if divisor == 0:
-                            st.error(f"Impossible de diviser par zéro pour {file_name}: {col_name}")
-                            continue
-                        new_col_name = f"{col_name}_div{divisor}"
-                        df_copy[new_col_name] = df_copy[col_name] / divisor
-                        st.success(f"Division par {divisor} appliquée sur {file_name}: {col_name}")
-
-                
-                except Exception as e:
-                    st.error(f"Erreur lors de l'application de l'opération '{operation}' sur {file_name}: {col_name}: {str(e)}")
+                        if operation == "addition":
+                            df_copy[col_name] = df_copy[col_name].add(param_value)
+                        elif operation == "multiplication":
+                            df_copy[col_name] = df_copy[col_name].mul(param_value)
+                        elif operation == "division":
+                            if param_value != 0:
+                                df_copy[col_name] = df_copy[col_name].div(param_value)
+                            else:
+                                raise ValueError("Division by zero")
+                                
+                        # Conserver les métadonnées
+                        df_copy.attrs['file_name'] = file_name
+                        
+                    except ValueError as e:
+                        raise ValueError(f"Invalid parameter or column values in column {col_name}: {str(e)}")
+                    except Exception as e:
+                        raise Exception(f"Error processing column {col_name}: {str(e)}")
         
         modified_dfs.append(df_copy)
     
