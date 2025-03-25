@@ -3,116 +3,351 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import hashlib
+from src import lecture, graphe,appliquer_operation
 
 
-def lecture(file, delimiter, decimal_separator, start_row, end_row=None, header_row=0):
-    try:
-        file.seek(0)
-        header_df = pd.read_csv(file, delimiter=delimiter, decimal=decimal_separator,
-                                skiprows=range(header_row), nrows=1, header=None, engine='python',
-                                on_bad_lines='warn')
-        
-        column_names = header_df.iloc[0].tolist()
-        
-        seen = {}
-        unique_column_names = []
-        for i, col in enumerate(column_names):
-            if col is None or pd.isna(col) or str(col).strip() == '':
-                col = f"Colonne_{i+1}"
-            if col in seen:
-                seen[col] += 1
-                unique_column_names.append(f"{col}_{seen[col]}")
-            else:
-                seen[col] = 0
-                unique_column_names.append(col)
-        
-        file.seek(0)
-        data_df = pd.read_csv(file, delimiter=delimiter, decimal=decimal_separator,
-                               skiprows=range(start_row + header_row), nrows=end_row - start_row + 1 if end_row else None,
-                               header=None, names=unique_column_names, engine='python', on_bad_lines='warn')
-        
-        data_df.attrs['file_name'] = file.name
-        return data_df
-    except Exception as e:
-        st.error(f"Erreur de lecture du fichier {file.name}: {str(e)}")
-        return None
-
-
-
-
-def graphe(dataframes, colors, x_axis, y_axis, x_label="X Axis", y_label="Y Axis"):
-    fig = go.Figure()
+def main():
+    st.title("Interactive Multi-File Analysis")
+    st.subheader("Upload multiple files, configure data, and generate interactive plots")
+    st.markdown("---")
     
-    # 1. Configuration RESPONSIVE critique
-    fig.update_layout(
-        autosize=True,
-        margin=dict(autoexpand=True, l=0, r=0, t=30, b=0),  # Marges minimales
-    )
+    # Gestion des fichiers
+    uploaded_files = st.file_uploader("Import Files", 
+                                    type=['csv', 'txt', 'dat'],
+                                    accept_multiple_files=True)
     
-    # 2. Ajout des données (exemple adapté)
-    for df, color in zip(dataframes, colors):
-        file_name = df.attrs.get('file_name', 'unknown')
-        for x_col, y_col in zip(x_axis, y_axis):
-            if x_col.startswith(file_name + "||") and y_col.startswith(file_name + "||"):
-                x_name = x_col.split("||")[1]
-                y_name = y_col.split("||")[1]
-                fig.add_trace(go.Scatter(
-                    x=df[x_name],
-                    y=df[y_name],
-                    mode='lines',
-                    line=dict(width=2, color=color),
-                ))
+    if st.button("Reset All", type="secondary", use_container_width=True):
+        # Supprimer toutes les clés de session
+        keys_to_reset = ['file_configs', 'dataframes', 'colors', 'data_modified', 'file_configs_hash']
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
     
-    # 3. Optimisation finale
-    fig.update_layout(
-        xaxis_title=x_label,
-        yaxis_title=y_label,
-        hovermode='x unified'
-    )
-    
-    return fig
+    # Initialisation de la session
+    if 'file_configs' not in st.session_state:
+        st.session_state.file_configs = {}
+    if 'dataframes' not in st.session_state:
+        st.session_state.dataframes = []
+    if 'colors' not in st.session_state:
+        st.session_state.colors = []
+    if 'data_modified' not in st.session_state:
+        st.session_state.data_modified = False
+    if 'file_configs_hash' not in st.session_state:
+        st.session_state.file_configs_hash = None
 
-
-
-
-
-
-def appliquer_operation(dataframes, operation, colonnes_selectionnees, param):
-    separator = "||"
-    modified_dfs = []
-    
-    for df in dataframes:
-        # Faire une copie profonde du DataFrame
-        df_copy = df.copy(deep=True)
-        file_name = df_copy.attrs.get('file_name', 'unknown')
+    # Mise à jour des configurations
+    if uploaded_files:
+        current_files = set(st.session_state.file_configs.keys())
+        new_files = {f.name for f in uploaded_files}
         
-        for col_selection in colonnes_selectionnees:
-            if col_selection.startswith(file_name + separator):
-                col_name = col_selection.split(separator)[1]
-                if col_name in df_copy.columns:
+        # Supprimer les fichiers retirés
+        for removed in current_files - new_files:
+            del st.session_state.file_configs[removed]
+        
+        # Ajouter les nouveaux fichiers
+        for f in uploaded_files:
+            if f.name not in st.session_state.file_configs:
+                st.session_state.file_configs[f.name] = {
+                    'delimiter': ';',
+                    'decimal': ',',
+                    'color': "#%02x%02x%02x" % tuple(np.random.randint(0, 255, 3)),
+                    'start_row': 0,
+                    'header_row': 0,
+                    'end_row': None
+                }
+
+    # Vérifier les changements de configuration
+    if 'file_configs' in st.session_state:
+        current_configs = st.session_state.file_configs
+        current_hash = hashlib.md5(str(current_configs).encode()).hexdigest()
+        
+        if st.session_state.file_configs_hash != current_hash:
+            st.session_state.data_modified = False
+            st.session_state.file_configs_hash = current_hash
+
+    # Chargement conditionnel des données
+    if uploaded_files and not st.session_state.data_modified:
+        dataframes = []
+        colors = []
+        
+        for file_name, config in st.session_state.file_configs.items():
+            file_obj = next(f for f in uploaded_files if f.name == file_name)
+            df = lecture(file_obj, config['delimiter'], config['decimal'],
+                        config['start_row'], config['end_row'], config['header_row'])
+            if df is not None:
+                dataframes.append(df)
+                colors.append(config['color'])
+        
+        st.session_state.dataframes = dataframes
+        st.session_state.colors = colors
+
+    # Interface de configuration
+    if uploaded_files:
+        selected_file = st.selectbox("Selected File", 
+                                   options=list(st.session_state.file_configs.keys()))
+        
+        with st.expander(f"Configuration: {selected_file}", expanded=True):
+            config = st.session_state.file_configs[selected_file]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                config['delimiter'] = st.selectbox(
+                    "Column Separator",
+                    [',', ';', '\t', '|'],
+                    key=f"del_{selected_file}",
+                    index=1 if config['delimiter'] == ';' else 0
+                )
+                
+                config['color'] = st.color_picker(
+                    "Plot Color",
+                    value=config['color'],
+                    key=f"col_{selected_file}"
+                )
+            
+            with col2:
+                config['decimal'] = st.selectbox(
+                    "Decimal Separator",
+                    ['.', ','],
+                    key=f"dec_{selected_file}",
+                    index=1 if config['decimal'] == ',' else 0
+                )
+                
+                config['header_row'] = st.number_input(
+                    "Header Row",
+                    min_value=0,
+                    value=config['header_row'],
+                    key=f"head_{selected_file}",
+                    help="Row containing column titles"
+                )
+            
+            st.markdown("**Row Selection**")
+            col3, col4 = st.columns(2)
+            with col3:
+                config['start_row'] = st.number_input(
+                    "First Data Row",
+                    min_value=0,
+                    value=config['start_row'],
+                    key=f"start_{selected_file}",
+                    help="First row of data to display"
+                )
+            
+            with col4:
+                config['end_row'] = st.number_input(
+                    "Last Data Row",
+                    min_value=config['start_row'],
+                    value=config['end_row'] or config['start_row'] + 100,
+                    key=f"end_{selected_file}"
+                )
+            
+            # Prévisualisation des données
+            file_obj = next(f for f in uploaded_files if f.name == selected_file)
+            df = lecture(
+                file_obj,
+                config['delimiter'],
+                config['decimal'],
+                config['start_row'],
+                config['end_row'],
+                config['header_row']
+            )
+            
+            if df is not None:
+                st.markdown(f"**Data Preview ({df.shape[0]} rows, {df.shape[1]} columns)**")
+                st.dataframe(df.head(3), use_container_width=True)
+
+    # Section des opérations sur les colonnes
+    if st.session_state.file_configs:
+        st.markdown("---")
+        st.subheader("Column Operations")
+        
+        separator = "||"
+        all_columns = []
+        all_column_options = []
+        
+        current_dataframes = st.session_state.dataframes
+        
+        for df in current_dataframes:
+            file_name = df.attrs['file_name']
+            for col in df.columns:
+                col_id = f"{file_name}{separator}{col}"
+                col_display = f"{file_name}: {col}"
+                all_columns.append(col_id)
+                all_column_options.append(col_display)
+        
+        options_map = dict(zip(all_column_options, all_columns))
+        
+        with st.container():
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                col_display = st.multiselect(
+                    "Select Columns to Process", 
+                    all_column_options,
+                    help="Select columns to apply the operation"
+                )
+                colonnes_selectionnees = [options_map[display] for display in col_display]
+            
+            with col2:
+                operation = st.selectbox(
+                    "Operation to Apply",
+                    [
+                        "addition", 
+                        "multiplication", 
+                        "division"
+                    ],
+                    help="Choose the operation to apply to selected columns"
+                )
+                
+                param_label = {
+                    "addition": "Value to Add",
+                    "multiplication": "Multiplication Factor",
+                    "division": "Divisor"
+                }
+                
+                param = st.text_input(
+                    param_label[operation],
+                    "1"
+                )
+            
+
+
+            if st.button("Apply Operation", type="secondary", key="apply_operation_btn",use_container_width=True):
+                if not colonnes_selectionnees:
+                    st.warning("Please select at least one column.")
+                else:
                     try:
-                        # Convertir la colonne en numérique si possible
-                        df_copy[col_name] = pd.to_numeric(df_copy[col_name], errors='coerce')
-                        param_value = float(param)
+                        modified_dataframes = appliquer_operation(
+                            current_dataframes, 
+                            operation, 
+                            colonnes_selectionnees, 
+                            param
+                        )
                         
-                        if operation == "addition":
-                            df_copy[col_name] = df_copy[col_name].add(param_value)
-                        elif operation == "multiplication":
-                            df_copy[col_name] = df_copy[col_name].mul(param_value)
-                        elif operation == "division":
-                            if param_value != 0:
-                                df_copy[col_name] = df_copy[col_name].div(param_value)
-                            else:
-                                raise ValueError("Division by zero")
-                                
-                        # Conserver les métadonnées
-                        df_copy.attrs['file_name'] = file_name
-                        
-                    except ValueError as e:
-                        raise ValueError(f"Invalid parameter or column values in column {col_name}: {str(e)}")
+                        # Vérifier que les modifications ont bien été appliquées
+                        if len(modified_dataframes) == len(current_dataframes):
+                            st.session_state.dataframes = modified_dataframes
+                            st.session_state.data_modified = True
+                            st.success(f"Operation '{operation}' applied successfully.")
+                            st.rerun()
+                        else:
+                            st.error("Error: The number of dataframes changed unexpectedly.")
+                            
                     except Exception as e:
-                        raise Exception(f"Error processing column {col_name}: {str(e)}")
+                        st.error(f"Failed to apply operation: {str(e)}")
+                        st.error("Please check that:")
+                        st.error("- All selected columns contain numerical values")
+                        st.error("- The parameter is a valid number")
+                        st.error("- No division by zero is attempted")
+            
+            
+            if st.button("Reset Calculations", 
+            type="secondary", 
+            help="Reset all column operations and restore original data",
+            key="reset_calculations_btn", use_container_width=True):
+                try:
+                    if not uploaded_files:
+                        st.warning("No files to reset!")
+                    else:
+                        # Réinitialiser les données
+                        st.session_state.dataframes = []
+                        for file_obj in uploaded_files:
+                            config = st.session_state.file_configs[file_obj.name]
+                            df = lecture(
+                                file_obj,
+                                config['delimiter'],
+                                config['decimal'],
+                                config['start_row'],
+                                config['end_row'],
+                                config['header_row']
+                            )
+                            if df is not None:
+                                st.session_state.dataframes.append(df)
+                        
+                        st.session_state.data_modified = False
+                        st.success("All calculations reset successfully!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Reset failed: {str(e)}")
+
+            # Espacement optionnel
+            st.markdown("""<style>
+            div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stVerticalBlock"] > div[data-testid="stButton"]) {
+                gap: 0.5rem;
+            }
+</style>""", unsafe_allow_html=True)
+
+    # Sélection des axes pour le graphique
+    if st.session_state.dataframes:  # Modification clé : vérifier si des dataframes existent
+        st.markdown("---")
+        st.subheader("Axis Configuration")
         
-        modified_dfs.append(df_copy)
-    
-    return modified_dfs
+        current_dataframes = st.session_state.dataframes
+        
+        separator = "||"
+        all_columns = []
+        all_column_options = []
+        
+        for df in current_dataframes:
+            file_name = df.attrs['file_name']
+            for col in df.columns:
+                col_id = f"{file_name}{separator}{col}"
+                col_display = f"{file_name}: {col}"
+                all_columns.append(col_id)
+                all_column_options.append(col_display)
+        
+        options_map = dict(zip(all_column_options, all_columns))
+        
+        col_x, col_y = st.columns(2)
+        with col_x:
+            x_display = st.multiselect("X Axis Selection", all_column_options, key="x_axis_select")
+            x_axis = [options_map[display] for display in x_display] if x_display else []
+        
+        with col_y:
+            y_display = st.multiselect("Y Axis Selection", all_column_options, key="y_axis_select")
+            y_axis = [options_map[display] for display in y_display] if y_display else []
+        
+        col_x_label, col_y_label = st.columns(2)
+        with col_x_label:
+            x_label = st.text_input("Customize X Axis Label", "X Axis")
+        
+        with col_y_label:
+            y_label = st.text_input("Customize Y Axis Label", "Y Axis")
+        
+
+
+
+
+        # Center the Generate Graph button
+        if st.button("Generate Graph", type="secondary", key="generate_graph", use_container_width=True):
+            if x_axis and y_axis:
+                try:
+                    fig = graphe(
+                        current_dataframes, 
+                        st.session_state.colors, 
+                        x_axis, 
+                        y_axis, 
+                        x_label, 
+                        y_label
+                    )
+                    
+                    if fig is not None:
+                        if fig is not None:
+                            st.plotly_chart(
+                                fig,
+                                use_container_width=True,
+                                config={'responsive': True},
+                                height=700  # Hauteur initiale (sera écrasée par le CSS)
+                            )
+                    else:
+                        st.warning("No valid graph could be generated. Check your axis selections.")
+                except Exception as e:
+                    st.error(f"Error generating graph: {str(e)}")
+            else:
+                st.warning("Please select X and Y axes before generating the graph")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
